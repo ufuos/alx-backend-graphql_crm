@@ -1,79 +1,30 @@
-# GraphQL CRM - Models, Schema, and Seeder
-
-This document contains the updated files required by the task: `models.py`, `crm/schema.py`, `graphql_crm/schema.py`, and `seed_db.py`.
-
-> **Instructions**: Save each code block into the corresponding file in your repository (`alx-backend-graphql_crm`). Run `python manage.py makemigrations` and `python manage.py migrate` before using the seed script. You can test GraphQL at `/graphql` after running the server.
-
----
-
-## `models.py`
-
-```python
-from django.db import models
-from django.core.validators import MinValueValidator
-from decimal import Decimal
-
-class Customer(models.Model):
-    name = models.CharField(max_length=255)
-    email = models.EmailField(unique=True)
-    phone = models.CharField(max_length=32, blank=True, null=True)
-
-    def __str__(self):
-        return f"{self.name} <{self.email}>"
-
-class Product(models.Model):
-    name = models.CharField(max_length=255)
-    price = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
-    stock = models.PositiveIntegerField(default=0)
-
-    def __str__(self):
-        return f"{self.name} (${self.price})"
-
-class Order(models.Model):
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='orders')
-    products = models.ManyToManyField(Product, related_name='orders')
-    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
-    order_date = models.DateTimeField(auto_now_add=True)
-
-    def recalc_total(self):
-        total = Decimal('0.00')
-        for p in self.products.all():
-            total += p.price
-        self.total_amount = total
-        self.save()
-
-    def __str__(self):
-        return f"Order {self.id} - {self.customer.name} - {self.total_amount}"
-```
-
----
-
-## `crm/schema.py`
-
-```python
 import re
 from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 import graphene
 from graphene_django import DjangoObjectType
+from graphene_django.filter import DjangoFilterConnectionField  # ✅ required for filtering and relay
 from .models import Customer, Product, Order
 
 # ---------- Types ----------
 class CustomerType(DjangoObjectType):
     class Meta:
         model = Customer
-        fields = ("id", "name", "email", "phone")
+        filter_fields = ["name", "email", "phone"]  # ✅ enable filters
+        interfaces = (graphene.relay.Node,)          # ✅ make Relay-compatible
 
 class ProductType(DjangoObjectType):
     class Meta:
         model = Product
-        fields = ("id", "name", "price", "stock")
+        filter_fields = ["name", "price", "stock"]
+        interfaces = (graphene.relay.Node,)
 
 class OrderType(DjangoObjectType):
     class Meta:
         model = Order
-        fields = ("id", "customer", "products", "total_amount", "order_date")
+        filter_fields = ["customer__name", "total_amount", "order_date"]
+        interfaces = (graphene.relay.Node,)
 
 # ---------- Utility validations ----------
 PHONE_REGEX = re.compile(r"^(\+\d{7,15}|\d{3}-\d{3}-\d{4})$")
@@ -126,14 +77,12 @@ class BulkCreateCustomers(graphene.Mutation):
         created = []
         errors = []
 
-        # Use a transaction but allow per-record savepoints to support partial success
         with transaction.atomic():
             for idx, data in enumerate(customers):
                 name = data.get('name')
                 email = data.get('email')
                 phone = data.get('phone', None)
 
-                # Start a savepoint for this record
                 sid = transaction.savepoint()
                 try:
                     if not name or not email:
@@ -204,18 +153,16 @@ class CreateOrder(graphene.Mutation):
     @classmethod
     def mutate(cls, root, info, customer_id, product_ids, order_date=None):
         errors = []
-        # Validate customer
         try:
             customer = Customer.objects.get(pk=customer_id)
         except Customer.DoesNotExist:
             errors.append("Invalid customer ID")
             return CreateOrder(order=None, errors=errors)
 
-        if not product_ids or len(product_ids) == 0:
+        if not product_ids:
             errors.append("At least one product must be selected")
             return CreateOrder(order=None, errors=errors)
 
-        # Validate and collect products
         products = []
         for pid in product_ids:
             try:
@@ -227,163 +174,36 @@ class CreateOrder(graphene.Mutation):
         if errors:
             return CreateOrder(order=None, errors=errors)
 
-        # Create order and associate products in a transaction
         with transaction.atomic():
-            if order_date:
-                od = order_date
-            else:
-                od = timezone.now()
-
-            order = Order.objects.create(customer=customer, order_date=od)
+            order = Order.objects.create(
+                customer=customer,
+                order_date=order_date or timezone.now()
+            )
             order.products.set(products)
-
-            # Ensure total is accurate by summing the product prices (use Decimal)
-            total = Decimal('0.00')
-            for p in products:
-                total += p.price
+            total = sum((p.price for p in products), Decimal('0.00'))
             order.total_amount = total
             order.save()
 
         return CreateOrder(order=order, errors=None)
 
 # ---------- Schema exports ----------
+class Query(graphene.ObjectType):
+    # ✅ Relay-compatible filter fields
+    all_customers = DjangoFilterConnectionField(CustomerType)
+    all_products = DjangoFilterConnectionField(ProductType)
+    all_orders = DjangoFilterConnectionField(OrderType)
+
+    def resolve_all_customers(root, info, **kwargs):
+        return Customer.objects.all()
+
+    def resolve_all_products(root, info, **kwargs):
+        return Product.objects.all()
+
+    def resolve_all_orders(root, info, **kwargs):
+        return Order.objects.all()
+
 class Mutation(graphene.ObjectType):
     create_customer = CreateCustomer.Field()
     bulk_create_customers = BulkCreateCustomers.Field()
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
-
-class Query(graphene.ObjectType):
-    customers = graphene.List(CustomerType)
-    products = graphene.List(ProductType)
-    orders = graphene.List(OrderType)
-
-    def resolve_customers(root, info):
-        return Customer.objects.all()
-
-    def resolve_products(root, info):
-        return Product.objects.all()
-
-    def resolve_orders(root, info):
-        return Order.objects.all()
-```
-
----
-
-## `graphql_crm/schema.py`
-
-```python
-import graphene
-from crm.schema import Query as CRMQuery, Mutation as CRMMutation
-
-class Query(CRMQuery, graphene.ObjectType):
-    pass
-
-class Mutation(CRMMutation, graphene.ObjectType):
-    pass
-
-schema = graphene.Schema(query=Query, mutation=Mutation)
-```
-
----
-
-## `seed_db.py`
-
-```python
-# Run this script with: python manage.py shell < seed_db.py
-# or import and run the `run()` function from a Django shell
-
-from decimal import Decimal
-from crm.models import Customer, Product
-
-
-def run():
-    # Create some products
-    products_data = [
-        {"name": "Laptop", "price": Decimal('999.99'), "stock": 10},
-        {"name": "Mouse", "price": Decimal('25.50'), "stock": 100},
-        {"name": "Keyboard", "price": Decimal('45.00'), "stock": 50},
-    ]
-
-    for p in products_data:
-        obj, created = Product.objects.get_or_create(name=p['name'], defaults={
-            'price': p['price'], 'stock': p['stock']
-        })
-        if created:
-            print(f"Created product: {obj}")
-
-    # Create some customers
-    customers_data = [
-        {"name": "Alice", "email": "alice@example.com", "phone": "+1234567890"},
-        {"name": "Bob", "email": "bob@example.com", "phone": "123-456-7890"},
-    ]
-
-    for c in customers_data:
-        obj, created = Customer.objects.get_or_create(email=c['email'], defaults={
-            'name': c['name'], 'phone': c.get('phone')
-        })
-        if created:
-            print(f"Created customer: {obj}")
-
-
-if __name__ == '__main__':
-    run()
-```
-
----
-
-## Quick testing examples (GraphQL queries)
-
-> Use these directly at `/graphql` after starting the dev server.
-
-* Create single customer
-
-```graphql
-mutation {
-  createCustomer(name: "Alice", email: "alice@example.com", phone: "+1234567890") {
-    customer { id name email phone }
-    message
-    errors
-  }
-}
-```
-
-* Bulk create customers
-
-```graphql
-mutation {
-  bulkCreateCustomers(customers: [
-    {name: "Sam", email: "sam@example.com", phone: "123-456-7890"},
-    {name: "Eve", email: "alice@example.com"}  # intentionally duplicate
-  ]) {
-    customers { id name email }
-    errors
-  }
-}
-```
-
-* Create product
-
-```graphql
-mutation {
-  createProduct(name: "Tablet", price: 199.99, stock: 5) {
-    product { id name price stock }
-    errors
-  }
-}
-```
-
-* Create order
-
-```graphql
-mutation {
-  createOrder(customerId: "1", productIds:["1","2"]) {
-    order { id totalAmount orderDate customer { name } products { name price } }
-    errors
-  }
-}
-```
-
----
-
-If you want, I can also open a small checklist of commands to run locally (migrations, running server, running seed) or produce unit tests for these mutations.
