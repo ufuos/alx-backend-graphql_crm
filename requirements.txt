@@ -1,1 +1,3 @@
 django-crontab
+graphene-django
+graphene

@@ -4,7 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 import graphene
 from graphene_django import DjangoObjectType
-from graphene_django.filter import DjangoFilterConnectionField  # ✅ required for filtering and relay
+from graphene_django.filter import DjangoFilterConnectionField  # ✅ for filtering and relay
 from .models import Customer, Product, Order
 
 # ---------- Types ----------
@@ -14,11 +14,13 @@ class CustomerType(DjangoObjectType):
         filter_fields = ["name", "email", "phone"]  # ✅ enable filters
         interfaces = (graphene.relay.Node,)          # ✅ make Relay-compatible
 
+
 class ProductType(DjangoObjectType):
     class Meta:
         model = Product
         filter_fields = ["name", "price", "stock"]
         interfaces = (graphene.relay.Node,)
+
 
 class OrderType(DjangoObjectType):
     class Meta:
@@ -26,7 +28,7 @@ class OrderType(DjangoObjectType):
         filter_fields = ["customer__name", "total_amount", "order_date"]
         interfaces = (graphene.relay.Node,)
 
-# ---------- Utility validations ----------
+# ---------- Utility Validations ----------
 PHONE_REGEX = re.compile(r"^(\+\d{7,15}|\d{3}-\d{3}-\d{4})$")
 
 def validate_phone(phone: str) -> bool:
@@ -60,10 +62,12 @@ class CreateCustomer(graphene.Mutation):
         customer = Customer.objects.create(name=name.strip(), email=email, phone=phone)
         return CreateCustomer(customer=customer, message="Customer created successfully", errors=None)
 
+
 class CustomerInput(graphene.InputObjectType):
     name = graphene.String(required=True)
     email = graphene.String(required=True)
     phone = graphene.String(required=False)
+
 
 class BulkCreateCustomers(graphene.Mutation):
     class Arguments:
@@ -110,6 +114,7 @@ class BulkCreateCustomers(graphene.Mutation):
 
         return BulkCreateCustomers(customers=created, errors=errors if errors else None)
 
+
 class CreateProduct(graphene.Mutation):
     class Arguments:
         name = graphene.String(required=True)
@@ -140,6 +145,7 @@ class CreateProduct(graphene.Mutation):
 
         product = Product.objects.create(name=name.strip(), price=price, stock=stock)
         return CreateProduct(product=product, errors=None)
+
 
 class CreateOrder(graphene.Mutation):
     class Arguments:
@@ -186,7 +192,45 @@ class CreateOrder(graphene.Mutation):
 
         return CreateOrder(order=order, errors=None)
 
-# ---------- Schema exports ----------
+
+# ---------- Scheduled Stock Update Mutation ----------
+class UpdateLowStockProducts(graphene.Mutation):
+    class Arguments:
+        pass  # No arguments needed
+
+    updated_products = graphene.List(ProductType)
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    @classmethod
+    def mutate(cls, root, info):
+        try:
+            low_stock_qs = Product.objects.filter(stock__lt=10)
+            updated_products = []
+
+            for product in low_stock_qs:
+                product.stock += 10  # simulate restocking
+                product.save()
+                updated_products.append(product)
+
+            if updated_products:
+                msg = f"Restocked {len(updated_products)} product(s)."
+            else:
+                msg = "No low-stock products found."
+
+            return UpdateLowStockProducts(
+                updated_products=updated_products,
+                success=True,
+                message=msg
+            )
+        except Exception as e:
+            return UpdateLowStockProducts(
+                updated_products=[],
+                success=False,
+                message=f"Error during restock: {str(e)}"
+            )
+
+# ---------- Schema Exports ----------
 class Query(graphene.ObjectType):
     # ✅ Relay-compatible filter fields
     all_customers = DjangoFilterConnectionField(CustomerType)
@@ -202,8 +246,13 @@ class Query(graphene.ObjectType):
     def resolve_all_orders(root, info, **kwargs):
         return Order.objects.all()
 
+
 class Mutation(graphene.ObjectType):
     create_customer = CreateCustomer.Field()
     bulk_create_customers = BulkCreateCustomers.Field()
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
+    update_low_stock_products = UpdateLowStockProducts.Field()  # ✅ Added
+
+
+schema = graphene.Schema(query=Query, mutation=Mutation)
