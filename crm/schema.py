@@ -1,3 +1,5 @@
+# crm/schema.py doesn't contain: ["from crm.models import Product"]
+
 import re
 from decimal import Decimal
 from django.db import transaction
