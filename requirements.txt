@@ -1,3 +1,6 @@
 django-crontab
 graphene-django
 graphene
+celery>=5.2
+django-celery-beat>=2.5
+

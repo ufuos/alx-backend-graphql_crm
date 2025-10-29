@@ -1,21 +1,21 @@
-# crm/schema.py doesn't contain: ["from crm.models import Product"]
-
+# crm/schema.py
 import re
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 import graphene
 from graphene_django import DjangoObjectType
-from graphene_django.filter import DjangoFilterConnectionField  # ✅ for filtering and relay
-from crm.models import Customer, Product, Order  # ✅ fixed absolute import
+from graphene_django.filter import DjangoFilterConnectionField
+from crm.models import Customer, Product, Order  # ✅ absolute import
 
 
 # ---------- Types ----------
 class CustomerType(DjangoObjectType):
     class Meta:
         model = Customer
-        filter_fields = ["name", "email", "phone"]  # ✅ enable filters
-        interfaces = (graphene.relay.Node,)          # ✅ make Relay-compatible
+        filter_fields = ["name", "email", "phone"]
+        interfaces = (graphene.relay.Node,)
 
 
 class ProductType(DjangoObjectType):
@@ -31,6 +31,7 @@ class OrderType(DjangoObjectType):
         filter_fields = ["customer__name", "total_amount", "order_date"]
         interfaces = (graphene.relay.Node,)
 
+
 # ---------- Utility Validations ----------
 PHONE_REGEX = re.compile(r"^(\+\d{7,15}|\d{3}-\d{3}-\d{4})$")
 
@@ -38,6 +39,7 @@ def validate_phone(phone: str) -> bool:
     if not phone:
         return True
     return bool(PHONE_REGEX.match(phone))
+
 
 # ---------- Mutations ----------
 class CreateCustomer(graphene.Mutation):
@@ -199,7 +201,7 @@ class CreateOrder(graphene.Mutation):
 # ---------- Scheduled Stock Update Mutation ----------
 class UpdateLowStockProducts(graphene.Mutation):
     class Arguments:
-        pass  # No arguments needed
+        pass
 
     updated_products = graphene.List(ProductType)
     success = graphene.Boolean()
@@ -212,7 +214,7 @@ class UpdateLowStockProducts(graphene.Mutation):
             updated_products = []
 
             for product in low_stock_qs:
-                product.stock += 10  # simulate restocking
+                product.stock += 10
                 product.save()
                 updated_products.append(product)
 
@@ -233,12 +235,18 @@ class UpdateLowStockProducts(graphene.Mutation):
                 message=f"Error during restock: {str(e)}"
             )
 
-# ---------- Schema Exports ----------
+
+# ---------- Query (including CRM summary) ----------
 class Query(graphene.ObjectType):
-    # ✅ Relay-compatible filter fields
+    # Relay-compatible filters
     all_customers = DjangoFilterConnectionField(CustomerType)
     all_products = DjangoFilterConnectionField(ProductType)
     all_orders = DjangoFilterConnectionField(OrderType)
+
+    # CRM summary fields
+    customers_count = graphene.Int()
+    orders_count = graphene.Int()
+    total_revenue = graphene.Float()
 
     def resolve_all_customers(root, info, **kwargs):
         return Customer.objects.all()
@@ -249,13 +257,25 @@ class Query(graphene.ObjectType):
     def resolve_all_orders(root, info, **kwargs):
         return Order.objects.all()
 
+    def resolve_customers_count(root, info):
+        return Customer.objects.count()
 
+    def resolve_orders_count(root, info):
+        return Order.objects.count()
+
+    def resolve_total_revenue(root, info):
+        agg = Order.objects.aggregate(total=Sum("total_amount"))
+        return agg["total"] or 0.0
+
+
+# ---------- Mutation Root ----------
 class Mutation(graphene.ObjectType):
     create_customer = CreateCustomer.Field()
     bulk_create_customers = BulkCreateCustomers.Field()
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
-    update_low_stock_products = UpdateLowStockProducts.Field()  # ✅ Added
+    update_low_stock_products = UpdateLowStockProducts.Field()
 
 
+# ---------- Schema ----------
 schema = graphene.Schema(query=Query, mutation=Mutation)
