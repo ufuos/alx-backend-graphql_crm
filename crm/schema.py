@@ -5,7 +5,8 @@ from django.utils import timezone
 import graphene
 from graphene_django import DjangoObjectType
 from graphene_django.filter import DjangoFilterConnectionField  # ✅ for filtering and relay
-from .models import Customer, Product, Order
+from crm.models import Customer, Product, Order  # ✅ fixed absolute import
+
 
 # ---------- Types ----------
 class CustomerType(DjangoObjectType):
