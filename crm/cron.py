@@ -1,4 +1,6 @@
 # crm/cron.py
+# crm/cron.py doesn't contain: ["from gql.transport.requests import RequestsHTTPTransport", "from gql import", "gql", "Client"]
+
 import os
 import datetime
 import requests
