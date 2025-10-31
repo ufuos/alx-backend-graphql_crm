@@ -2,12 +2,10 @@
 import os
 import requests  # ✅ Added missing import
 from datetime import datetime  # ✅ Added missing import
-from celery import shared_task
 from django.utils import timezone
 from graphene.test import Client as GrapheneClient
-from crm import schema as crm_schema_module  # expects crm/schema.py exports `schema`
+from crm import schema as crm_schema_module  # expects crm/schema.py exports schema
 from django.db.models import Sum
-
 
 LOG_PATH = "/tmp/crm_report_log.txt"
 
@@ -19,15 +17,13 @@ def _log_line(text: str):
         f.write(line)
 
 
-@shared_task(bind=True, name="crm.tasks.generate_crm_report")
-def generate_crm_report(self):
+def generate_crm_report():
     """
     Generates a CRM report: total customers, total orders, total revenue.
     Tries to fetch via GraphQL query first; falls back to Django ORM if necessary.
     Logs output to /tmp/crm_report_log.txt
     """
 
-    # ✅ Optionally use datetime for timestamp reporting if needed
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     graph_query = """
